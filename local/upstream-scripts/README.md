@@ -24,13 +24,19 @@
 29b2c4fef029114017ba90e10641cd8d  task_runner.py     ← 原版，未打补丁
 ```
 
-## ⚠️ 发布风险（重要）
+## ✅ 已入库（有意为之）
 
-本目录位于 `local/`，**受版本控制**，而 `uxiner/workbuddy2api-panel` 是 **public 仓库**。
-原版是 MIT 许可（`Copyright (c) 2026 Sliverkiss`），再分发需保留版权声明。
+这 4 个脚本**已提交进 git**，这是刻意的决定：
 
-**如果你不打算公开这些脚本**，请在提交前把本目录加入 `local/.gitignore`，
-或用 `git update-index --skip-worktree` 排除。当前**尚未提交**。
+- 它们是**删库后的唯一副本**，必须有 git 的多副本冗余（本地 + GitHub）保活
+- `local/` 上游永不包含 → **零 merge 冲突**
+- 已扫描确认**不含任何硬编码凭据 / 真实 uid**
+- MIT 许可合规：根目录 `LICENSE` 本就含原始版权声明
+  （`Copyright (c) 2026 Sliverkiss (original project: https://github.com/Sliverkiss/workbuddy2api)`），
+  出处另见本目录 `NOTICE.md`
+
+> 早前版本曾把本目录加入 `.gitignore` —— 那是个**错误**：把唯一副本排除出版本控制，
+> 等于放弃了 git 的冗余保护，一次误删就永久丢失。已更正。
 
 ## ★ 对镜像替换的决定性影响
 
@@ -82,6 +88,19 @@ if not (dest / 'task_runner.py').is_file():
 
 **因此：替换镜像时，务必保留本目录的 `task_common.py`（295 行版）**，
 不要用 fork 的 222 行版覆盖它。
+
+## 一键部署
+
+```bash
+./apply.sh            # 部署到群晖（原版 + 补丁 → 宿主机 scripts/ 与回落目录）
+./apply.sh --verify   # 只读：检查群晖当前状态
+./apply.sh --local    # 只在本机校验补丁能干净应用
+```
+
+补丁存放在 `patches/*.patch`（标准 unified diff，可 `patch -p0` 应用），
+因此本目录的 `*.py` 保持**原版未改动**，便于：
+1. 审阅补丁到底改了什么（`cat patches/*.patch`）
+2. 将来上游若修复该 bug，据此判断是否还需要自己的补丁
 
 ## 恢复方法
 
