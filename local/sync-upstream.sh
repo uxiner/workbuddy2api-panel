@@ -222,6 +222,33 @@ cmd_sync() {
   finish_sync "$branch" "$target"
 }
 
+# Go 缓存默认落在 $HOME（~/go、~/Library/Caches/go-build），在沙箱/受限环境
+# 下不可写，会导致 go build 失败。这里把缓存重定向到工作区内。
+# 同时把它们写进 .git/info/exclude —— 那是纯本地忽略规则，不进版本库、
+# 与上游零冲突，比改根 .gitignore 安全。
+setup_go_env() {
+  local root
+  root="$(git rev-parse --show-toplevel)"
+
+  # 已显式设置过就不覆盖
+  export GOMODCACHE="${GOMODCACHE:-$root/.gocache/mod}"
+  export GOCACHE="${GOCACHE:-$root/.gocache/build}"
+  # 关键：必须 readonly。用 -mod=mod 会让 go 静默重写 go.mod（例如把间接依赖
+  # 提升为直接依赖），那等于改动了上游文件，会给每次同步制造无谓冲突。
+  export GOFLAGS="${GOFLAGS:--mod=readonly}"
+
+  mkdir -p "$GOMODCACHE" "$GOCACHE" 2>/dev/null || true
+
+  # 让 go 缓存不被 git 看见（本地规则，永不追踪）
+  local ex="$root/.git/info/exclude"
+  if [ -f "$ex" ] || [ -d "$(dirname "$ex")" ]; then
+    grep -qxF '/.gocache/' "$ex" 2>/dev/null || {
+      printf '/.gocache/\n' >> "$ex"
+      c_cyn "  (已把 .gocache/ 加入 .git/info/exclude，永不会被提交)"
+    }
+  fi
+}
+
 cmd_verify() {
   need_repo
   hdr "构建与测试"
@@ -231,7 +258,17 @@ cmd_verify() {
     echo "  未验证的合并不要推到 main。"
     exit 1
   fi
+  # 沙箱/CI 下 $HOME 可能不可写，把 Go 缓存重定向到工作区内，
+  # 否则 go build 会因为写不了 ~/go 与 ~/Library/Caches/go-build 而失败。
+  setup_go_env
   echo "  Go: $(go version)"
+
+  # 记录构建前的 go.mod / go.sum，构建后比对。
+  # 这两个文件是上游文件，被 go 工具链意外改写会污染同步。
+  local mod_before sum_before
+  mod_before="$(git hash-object go.mod 2>/dev/null || echo '')"
+  sum_before="$(git hash-object go.sum 2>/dev/null || echo '')"
+
   c_cyn "→ go build ./..."
   go build ./... || die "编译失败"
   c_grn "  构建通过 ✓"
@@ -239,7 +276,21 @@ cmd_verify() {
   go vet ./... || c_yel "  vet 有告警（未必阻塞）"
   c_cyn "→ go test ./..."
   go test ./... || die "测试失败 —— 别推到 main"
+
+  # 防污染检查
+  local mod_after sum_after
+  mod_after="$(git hash-object go.mod 2>/dev/null || echo '')"
+  sum_after="$(git hash-object go.sum 2>/dev/null || echo '')"
+  if [ "$mod_before" != "$mod_after" ] || [ "$sum_before" != "$sum_after" ]; then
+    c_red "⚠ go 工具链改写了 go.mod / go.sum（上游文件被污染）"
+    git diff --stat -- go.mod go.sum | sed 's/^/    /'
+    c_yel "  已自动还原。若你确实需要改依赖，请单独 commit 并在"
+    c_yel "  local/LOCAL_CHANGES.md 记录原因。"
+    git checkout -- go.mod go.sum 2>/dev/null || true
+  fi
+
   c_grn "全部通过 ✓"
+  echo "  (go.mod / go.sum 未被改写 ✓)"
 }
 
 finish_sync() {

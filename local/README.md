@@ -104,3 +104,29 @@ git log --grep '^local:' --oneline      # 随时列出全部二开
 
 `git rerere` 已开启：解过一次的冲突，上游下次改同一处会自动套用你的解法。
 后台自动运行的仓库建议再加一条定时体检（见 `sync-upstream.sh check`）。
+
+## Go 环境（已装好）
+
+本机 Go 由 Homebrew 安装：`go1.27.1 darwin/arm64`（`/opt/homebrew/bin/go`）。
+`go.mod` 声明 `go 1.22.5`，1.27 向下兼容，构建与测试全部通过。
+
+**缓存位置**：默认的 `~/go` 与 `~/Library/Caches/go-build` 在受限环境下不可写，
+所以 `verify` 会把缓存重定向到工作区内的 `.gocache/`：
+
+- `GOMODCACHE=./.gocache/mod`
+- `GOCACHE=./.gocache/build`
+
+这些通过 `local/sync-upstream.sh` 的 `setup_go_env` 自动设置，**无需手动 export**。
+`.gocache/` 已写入 `.git/info/exclude`（纯本地规则，不进版本库、与上游零冲突）。
+
+> ⚠️ **`GOFLAGS` 必须是 `-mod=readonly`。**
+> 若用 `-mod=mod`，`go build` 会静默重写 `go.mod`（例如把间接依赖提升为直接依赖），
+> 那等于改动了上游文件，会给每次同步制造无谓冲突。`verify` 现在会在构建前后
+> 比对 `go.mod`/`go.sum` 的哈希，一旦被改写立即告警并自动还原。
+
+手动跑 Go 命令时（不经脚本）：
+
+```bash
+export GOMODCACHE="$PWD/.gocache/mod" GOCACHE="$PWD/.gocache/build" GOFLAGS=-mod=readonly
+go build ./... && go test ./...
+```
