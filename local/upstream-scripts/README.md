@@ -57,13 +57,22 @@ if not (dest / 'task_runner.py').is_file():
     return _fail('提取后仍未找到 task_runner.py（容器内 /app/scripts/ 是否存在？）')
 ```
 
-**好消息**（已实测 `docker cp` 语义）：`docker cp` 是**合并**，不会删除目标目录里的已有文件。
-所以替换镜像后，`/app/data/upstream-scripts/` 里**旧的 `task_runner.py` 会残留**，
-功能**不会立刻失效** —— 但也不会更新（新镜像里没有可更新的版本）。
+### ★ 正确放置位置：宿主机 `scripts/`（已实施）
 
-**坏消息 —— 真正的坑**：新镜像里**没有** `task_common.py`。
-但 `docker cp` 合并语义下旧文件仍残留，所以只要不手动清理该目录，就还能跑。
-**一旦 `docker compose down` 后清空 data、或迁移到新机器，这 4 个脚本就会永久消失。**
+`_script_path()` **宿主机目录优先**，而它是 bind mount，**不受镜像重建影响**：
+
+```
+/volume1/docker/workbuddy2api/scripts/    ← ① 优先（manager 内为 /opt/workbuddy2api/scripts/）
+/volume1/docker/workbuddy-manager/data/upstream-scripts/   ← ② 回落（双保险）
+```
+
+**已把 4 个脚本 + 补丁放入 ①**，于是：
+- 替换成 fork 镜像后**不会失效**（manager 从宿主机读，不从镜像读）
+- 清空 `data/` 也不丢
+- 不会被 `docker cp` 覆盖
+
+> 补充：`docker cp` 经实测是**合并**语义，不会删除目标目录中镜像里不存在的文件。
+> 这只作为次要保障；**主保障是放在宿主机 `scripts/`**。
 
 ### 另一个已确认的兼容性缺口
 

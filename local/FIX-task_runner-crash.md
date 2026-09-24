@@ -163,10 +163,11 @@ except Exception as e:
 
 ## 5. 部署位置
 
-| 位置 | 路径 |
-|---|---|
-| 宿主机（持久） | `/volume1/docker/workbuddy-manager/data/upstream-scripts/{task_common,task_runner}.py` |
-| 容器内（同挂载卷） | `/app/data/upstream-scripts/` |
+| 位置 | 路径 | 优先级 |
+|---|---|---|
+| **宿主机（主）** | `/volume1/docker/workbuddy2api/scripts/*.py` | ① 优先，**不受镜像重建影响** |
+| 宿主机（备） | `/volume1/docker/workbuddy-manager/data/upstream-scripts/*.py` | ② 回落 |
+| 容器内 | `/opt/workbuddy2api/scripts/` 与 `/app/data/upstream-scripts/`（均为 bind mount 同一份） | — |
 
 属主 `10001:10001`，权限 `755`。
 
@@ -204,21 +205,67 @@ sudo cp /volume1/docker/workbuddy-manager/data/upstream-scripts/task_runner.py.o
 sudo chown 10001:10001 /volume1/docker/workbuddy-manager/data/upstream-scripts/*.py
 ```
 
-## 7. ⚠️ 补丁可能被覆盖的情形
+## 7. 持久化位置（重要 —— 已修正早前的错误结论）
 
-`taskrun.py` 用**镜像 ID** 作缓存指纹（`_cache_is_fresh()`）：
+`taskrun.py` 的 `_script_path()` 有**两级查找，宿主机优先**：
 
-- **镜像 ID 不变** → 不重新提取 → 补丁**保留** ✅（当前状态）
-- **重建/替换 workbuddy2api 镜像** → ID 变化 → 下次调用 `extract_scripts()` 重新 `docker cp`
-  → 用镜像内的 `task_runner.py` **覆盖**宿主机文件 → **补丁丢失** ⚠️
+```python
+def _script_path():
+    host = _host_script()                            # ① 宿主机挂载目录 —— 优先
+    if host is not None:
+        return host
+    extracted = _extract_dir() / 'task_runner.py'    # ② 镜像提取 —— 回落
+    if extracted.is_file() and _cache_is_fresh():
+        return extracted
+    ...
+```
 
-> 注：`docker cp` 是**合并**语义（实测确认：目标目录里镜像中不存在的文件不会被删）。
-> 所以如果新镜像的 `/app/scripts/` 里**没有** `task_runner.py`，
-> 旧文件会残留 —— 此时 `_fail('提取后仍未找到…')` 也不会触发，因为文件还在。
-> 但**补丁会被镜像内的旧版本覆盖**（只要镜像里有该文件）。
+而 `_host_script()` = `config.UPSTREAM_DIR / 'scripts' / 'task_runner.py'`，
+群晖上是 `/volume1/docker/workbuddy2api/scripts/`（manager 内映射为 `/opt/workbuddy2api/scripts/`）。
 
-**因此：每次替换/重建 workbuddy2api 镜像后，需重新应用本补丁。**
-建议把补丁文件一并纳入 `local/` 管理，并在替换流程中加一步「重新打补丁」。
+### ★ 正确做法：补丁放宿主机 scripts/
+
+```
+/volume1/docker/workbuddy2api/scripts/          ← ① 优先，且不受镜像重建影响
+├── task_common.py          补丁版
+├── task_runner.py          补丁版
+├── school_open_day_2026.py 原版
+└── global_region.py        原版
+
+/volume1/docker/workbuddy-manager/data/upstream-scripts/   ← ② 回落，双保险
+```
+
+**为什么这样最稳**：
+
+| 场景 | 放 `data/upstream-scripts/`（②） | 放宿主机 `scripts/`（①） |
+|---|---|---|
+| 重建/替换 workbuddy2api 镜像 | ⚠️ 被 `docker cp` 覆盖 | ✅ 不受影响 |
+| 替换成 fork 镜像 | ⚠️ 依赖旧文件残留 | ✅ 始终生效 |
+| 清空 `data/` 目录 | ⚠️ 脚本永久丢失 | ✅ 不受影响 |
+| fork 版缺 `auth_is_global` | ⚠️ 有 AttributeError 风险 | ✅ 恒用 295 行完整版 |
+
+> **早前结论更正**：曾写「每次重建镜像后需重新打补丁」—— **不必要**。
+> 只要补丁放在宿主机 `scripts/`（①），镜像怎么变都不影响，因为 manager 优先读它。
+
+### 验证方式
+
+```bash
+D=/var/packages/ContainerManager/target/usr/bin/docker
+$D exec workbuddy-manager python3 -c "
+import sys; sys.path.insert(0,'/app')
+from server.services import taskrun
+print(taskrun._script_path())   # 应输出 /opt/workbuddy2api/scripts/task_runner.py
+print(taskrun.available())      # 应输出 (True, '')
+"
+```
+
+实测输出：
+
+```
+_host_script(): /opt/workbuddy2api/scripts/task_runner.py
+_script_path() : /opt/workbuddy2api/scripts/task_runner.py
+available()    : (True, '')
+```
 
 ## 8. 上游是否已修复？
 
