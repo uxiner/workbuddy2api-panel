@@ -1,0 +1,38 @@
+--- task_runner.py	2026-09-24 20:53:42
++++ /tmp/patched/task_runner.py	2026-09-24 21:54:01
+@@ -1352,7 +1352,16 @@
+             stats["total"] += 1
+             stats["skip"] += 1
+             continue
+-        process_task(auth, code, t, opts, stats)
++        # 任务级隔离：单个任务的网络/解析异常不再冒泡终止**整批账号**。
++        # 为什么需要：process_task -> light_up 的回读路径会调 tc.task_status ->
++        # list_tasks，而 list_tasks 对瞬时网络失败（http=-1）直接 raise。实测一次
++        # 抖动就让第 2 个账号之后的 6 个账号完全没跑（整个 --yes 批次中止）。
++        # 与下方 mp / school 段已有的 try/except 保持同一口径。
++        try:
++            process_task(auth, code, t, opts, stats)
++        except Exception as e:
++            print(f"[task_runner] {uid8} {code}: 任务异常，跳过待下次: {e!r}")
++            stats["fail"] += 1
+ 
+     # 小程序成长任务段（mp 口径）：已完成/可领状态下 only_claim 模式仍可入账（claim 幂等）；
+     # 未完成则点亮判据属写操作，与 school 段同规则只在非 only_claim 模式触发。
+\ No newline at end of file
+@@ -1443,7 +1452,14 @@
+             print(f"[skip] {uid8} global realm 不适用 CN 任务")
+             stats["skip"] += 1
+             continue
+-        process_account(c, a, stats)
++        # 账号级隔离：兜住 process_account 内未被单任务 try 覆盖的异常
++        # （如 list_tasks 在账号入口处就失败后的其它意外），保证剩余账号继续。
++        try:
++            process_account(c, a, stats)
++        except Exception as e:
++            uid8 = (c.get("uid") or "")[:8] or "?"
++            print(f"ERR: [task_runner] {uid8} 账号处理异常，跳过: {e!r}")
++            stats["fail"] += 1
+ 
+     print_summary(stats)
+ 
+\ No newline at end of file

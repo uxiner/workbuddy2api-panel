@@ -10,6 +10,6 @@
 .ssh/
 *.token
 
-# 原版镜像专有脚本（删库后唯一副本，MIT 许可再分发需保留版权声明）。
-# 默认不提交；确需备份到私有仓库时用 git add -f。
-upstream-scripts/*.py
+# 注：local/upstream-scripts/*.py 是**有意提交**的 —— 见该目录 README。
+# 它们来自已删库的原版镜像（两个上游仓库全历史都没有），必须靠 git 冗余保活。
+# 因此这里**不要**添加 upstream-scripts/ 的排除规则。

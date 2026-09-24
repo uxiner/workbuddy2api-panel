@@ -1,0 +1,62 @@
+--- task_common.py	2026-09-24 20:53:43
++++ /tmp/patched/task_common.py	2026-09-24 21:54:01
+@@ -37,6 +37,15 @@
+ 
+ # growth 域常量（travel.go / report.go 与本次实测对齐）
+ PATH_LIST_TASKS     = "/v2/activity/growth/tasks"
++
++# 瞬时网络错误重试（连接重置 / 读超时 / DNS 抖动）。
++# 为什么需要：_request 对非 HTTPError 的异常返回 -1，而 list_tasks 见到非 200
++# 直接 raise。一次瞬时抖动就会让**整批账号**在回读阶段崩掉（实测：第 2 个账号
++# 崩后，剩余 6 个账号完全没跑）。这里只对 GET 重试——GET 幂等，POST（上报/领奖）
++# 不重试，避免「服务端已处理但响应丢失」造成重复入账。
++_TRANSIENT_RETRIES   = 2
++_TRANSIENT_RETRY_GAP = 1.5
++
+ PATH_ACCEPT_TASKS   = "/v2/activity/growth/tasks/accept"
+ PATH_CLAIM_REWARD   = "/activity/growth/tasks"   # + "/{code}/claim"（M15 chat 域实测口径）
+ PATH_BUDDY_FIRST    = "/activity/growth/buddy/first"
+\ No newline at end of file
+@@ -118,19 +127,31 @@
+         hdr.update(headers)
+     data = json.dumps(body).encode() if body is not None else None
+     req = urllib.request.Request(url, data=data, headers=hdr, method=method)
+-    try:
+-        with urllib.request.urlopen(req, timeout=timeout) as r:
+-            return r.status, json.loads(r.read().decode("utf-8", "replace"))
+-    except urllib.error.HTTPError as e:
+-        t = e.read().decode("utf-8", "replace")
++
++    def _once():
+         try:
+-            return e.code, json.loads(t)
+-        except Exception:
+-            return e.code, {"raw": t[:300]}
+-    except Exception as e:
+-        return -1, {"err": repr(e)}
++            with urllib.request.urlopen(req, timeout=timeout) as r:
++                return r.status, json.loads(r.read().decode("utf-8", "replace"))
++        except urllib.error.HTTPError as e:
++            t = e.read().decode("utf-8", "replace")
++            try:
++                return e.code, json.loads(t)
++            except Exception:
++                return e.code, {"raw": t[:300]}
++        except Exception as e:
++            # 网络层失败：拿不到 HTTP 状态码，-1 表意「未收到响应」
++            return -1, {"err": repr(e)}
+ 
++    st, d = _once()
++    if method == "GET":
++        for i in range(_TRANSIENT_RETRIES):
++            if st != -1:
++                break
++            time.sleep(_TRANSIENT_RETRY_GAP * (i + 1))
++            st, d = _once()
++    return st, d
+ 
++
+ def do_get(auth, base, path, headers=None) -> tuple:
+     """GET 读请求，返回 (status, dict)。"""
+     return _request(auth, "GET", base, path, None, headers)
+\ No newline at end of file
