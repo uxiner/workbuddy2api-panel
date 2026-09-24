@@ -4,8 +4,11 @@
 #   status          我现在偏离上游多少？改了哪些文件？
 #   check           拉取上游，侦察下一个版本改了什么、预测冲突文件
 #   sync [tag]      同步到指定 tag（默认最新），在独立分支解冲突
+#   verify          编译 + vet + 测试（同步后必跑）
 #   abort           同步搞砸了，回退到同步前的状态
+#   conflicts       列出未解决的冲突文件 + 冲突标记速查
 #   tags            列出版本 tag
+#   bootstrap       全新 clone 后一键配好 remote 与 git 配置
 #
 # 设计要点：
 #   - 只在独立分支上 merge，main 从不处于「半解完冲突」状态
@@ -27,11 +30,24 @@ hdr()    { printf '\n\033[1;36m== %s ==\033[0m\n' "$*"; }
 
 die() { c_red "错误：$*"; exit 1; }
 
+# git clone 不会继承本地 config（rerere / zdiff3 会静默失效），
+# 所以每次运行都自愈式补上，而不是只在 bootstrap 时设一次。
+ensure_git_config() {
+  [ "$(git config --local --get rerere.enabled || echo '')" = "true" ] \
+    || git config --local rerere.enabled true
+  [ "$(git config --local --get rerere.autoupdate || echo '')" = "true" ] \
+    || git config --local rerere.autoupdate true
+  [ "$(git config --local --get merge.conflictstyle || echo '')" = "zdiff3" ] \
+    || git config --local merge.conflictstyle zdiff3
+}
+
 need_repo() {
   git rev-parse --git-dir >/dev/null 2>&1 || die "当前目录不是 git 仓库"
   git remote get-url "$UPSTREAM" >/dev/null 2>&1 \
-    || die "没有 remote '$UPSTREAM'。先执行：
-  git remote add $UPSTREAM https://github.com/linguo2625469/workbuddy2api-panel.git"
+    || die "没有 remote '$UPSTREAM'。执行 bootstrap，或手动：
+  git remote add $UPSTREAM https://github.com/linguo2625469/workbuddy2api-panel.git
+  git config rerere.enabled true && git config merge.conflictstyle zdiff3"
+  ensure_git_config
 }
 
 fetch_upstream() {
@@ -289,6 +305,32 @@ cmd_conflicts() {
   fi
 }
 
+cmd_bootstrap() {
+  git rev-parse --git-dir >/dev/null 2>&1 || die "当前目录不是 git 仓库。先 clone 你的 fork。"
+  hdr "配置 upstream remote"
+  if git remote get-url "$UPSTREAM" >/dev/null 2>&1; then
+    c_grn "  upstream 已存在：$(git remote get-url "$UPSTREAM")"
+  else
+    git remote add "$UPSTREAM" https://github.com/linguo2625469/workbuddy2api-panel.git
+    c_grn "  已添加 upstream"
+  fi
+  # 防止手滑把二开推到上游
+  git remote set-url --push "$UPSTREAM" no_push
+  c_grn "  已禁用 upstream 的 push（no_push）"
+
+  hdr "git 配置"
+  ensure_git_config
+  echo "  rerere.enabled     = $(git config --local --get rerere.enabled)"
+  echo "  rerere.autoupdate  = $(git config --local --get rerere.autoupdate)"
+  echo "  merge.conflictstyle= $(git config --local --get merge.conflictstyle)"
+  c_grn "  完成（rerere = 解过的冲突下次自动套用；zdiff3 = 冲突块带共同祖先）"
+
+  hdr "拉取上游 tag"
+  fetch_upstream
+  echo "  最新 tag：$(latest_tag)"
+  c_grn "bootstrap 完成。接着跑：./local/sync-upstream.sh status"
+}
+
 case "${1:-status}" in
   status)     cmd_status ;;
   check)      cmd_check ;;
@@ -297,8 +339,9 @@ case "${1:-status}" in
   abort)      cmd_abort ;;
   tags)       cmd_tags ;;
   conflicts)  cmd_conflicts ;;
+  bootstrap)  cmd_bootstrap ;;
   -h|--help|help)
-    sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
     ;;
-  *) die "未知命令 '$1'。可用：status | check | sync [tag] | verify | abort | tags | conflicts" ;;
+  *) die "未知命令 '$1'。可用：status | check | sync [tag] | verify | abort | conflicts | tags | bootstrap" ;;
 esac
