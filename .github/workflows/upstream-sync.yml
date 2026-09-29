@@ -8,7 +8,6 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  issues: write
 
 concurrency:
   group: upstream-sync
@@ -55,18 +54,12 @@ jobs:
 
       - name: Report conflict
         if: steps.merge.outputs.conflict == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          existing=$(gh issue list --state open --search '"Upstream sync conflict" in:title' --json number --jq '.[0].number')
-          if [ -z "$existing" ]; then
-            gh issue create \
-              --title 'Upstream sync conflict' \
-              --body "The scheduled sync from ${UPSTREAM_REPO} conflicted with main. No files were overwritten. Merge upstream/main locally into your fork main and resolve conflicts, then close this issue. Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-              --label 'upstream-sync'
-          else
-            echo "Existing conflict issue #$existing"
-          fi
+          {
+            echo '## Upstream sync conflict'
+            echo "No files were overwritten. Merge upstream/main locally into your fork main and resolve the conflict."
+            echo "Source: https://github.com/${UPSTREAM_REPO}"
+          } >> "$GITHUB_STEP_SUMMARY"
           exit 1
 
       - name: Test merged tree
