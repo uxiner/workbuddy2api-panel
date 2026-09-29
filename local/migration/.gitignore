@@ -1,0 +1,12 @@
+# 本目录的 config.json 是**从群晖现场配置翻译而来**，含真实 api_key 与 upstash token。
+# 绝不能提交到公开仓库。
+#
+# 注：根 .gitignore 恰好有 `config.json` 规则会挡住它，但那是上游的偶然规则，
+# 不应依赖 —— 这里显式再挡一层。
+#
+# 用精确文件名而非 glob：`config*.json` 会把脱敏示例也一起挡掉（已踩过）。
+/config.json
+
+# 其他可能的现场拷贝，一并挡住
+/config.live.json
+/config.*.local.json
